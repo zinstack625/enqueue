@@ -132,6 +132,7 @@ impl Svc {
             .body(Full::new(body)).unwrap());
     }
     async fn enqueue(&self, req: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+        let auth = req.headers().get("Auth").cloned();
         let bytes = req.collect().await?.to_bytes();
         let Ok(request) = serde_json::from_slice::<http_requests::EnqueueRequest>(&bytes) else {
             return Ok(Response::builder()
@@ -174,7 +175,29 @@ impl Svc {
             }
             res.unwrap()
         } else {
-            user.unwrap().unwrap()
+            let Some(token) = auth else {
+                return Ok(Response::builder()
+                    .status(hyper::StatusCode::UNAUTHORIZED)
+                    .body(Full::new(Bytes::from_static(b""))).unwrap());
+            };
+            let b64 = base64::engine::GeneralPurpose::new(&base64::alphabet::STANDARD, base64::engine::GeneralPurposeConfig::new());
+            let Ok(token) = b64.decode(token) else {
+                return Ok(Response::builder()
+                    .status(hyper::StatusCode::UNAUTHORIZED)
+                    .body(Full::new(Bytes::from_static(b""))).unwrap());
+            };
+            let user = user.unwrap().unwrap();
+            let Ok(session) = Sessions::find()
+                .filter(sessions::Column::UserId.eq(user.id))
+                .one(self.db.as_ref()).await else {
+                    return self.report_error().await;
+                };
+            if session.is_none() || session.unwrap().session_token != token {
+                return Ok(Response::builder()
+                    .status(hyper::StatusCode::UNAUTHORIZED)
+                    .body(Full::new(Bytes::from_static(b""))).unwrap());
+            }
+            user
         };
         let ticket = entities::tickets::ActiveModel {
             id: ActiveValue::NotSet,
