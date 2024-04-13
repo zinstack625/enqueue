@@ -38,6 +38,7 @@ impl Svc {
         };
         let Ok(Some((session, Some(user)))) = Sessions::find()
             .filter(sessions::Column::SessionToken.eq(token))
+            .filter(sessions::Column::Expiration.gt(chrono::Utc::now()))
             .find_also_related(Users)
             .one(self.db.as_ref()).await else {
                 return self.report_error().await;
@@ -94,7 +95,7 @@ impl Svc {
         let session_token = sessions::ActiveModel {
             user_id: ActiveValue::Set(user.id),
             session_token: ActiveValue::Set(hash),
-            expiration: ActiveValue::Set(chrono::Utc::now().fixed_offset()),
+            expiration: ActiveValue::Set(chrono::Utc::now().fixed_offset().checked_add_signed(chrono::TimeDelta::hours(1)).unwrap()),
         };
         Sessions::insert(session_token)
             .on_conflict(
